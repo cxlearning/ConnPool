@@ -32,21 +32,7 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestPool_Get_Impl(t *testing.T) {
-	p, _ := NewChannelPool(int64(maxFree), int64(maxConn), factory)
-	defer p.Close()
-	conn, err := p.Get()
-	if err != nil {
-		t.Errorf("Get error: %s", err)
-	}
-
-	_, ok := conn.(*PoolConn)
-	if !ok {
-		t.Errorf("Conn is not of type poolConn")
-	}
-}
-
-func TestPool_Get(t *testing.T) {
+func TestChannelPool_Get(t *testing.T) {
 	p, _ := NewChannelPool(int64(maxFree), int64(maxConn), factory)
 	defer p.Close()
 
@@ -95,57 +81,39 @@ func TestPool_Get(t *testing.T) {
 	}
 }
 
-func TestPool_Put(t *testing.T) {
-	p, err := NewChannelPool(int64(maxFree), int64(maxConn), factory)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestChannelPool_Put(t *testing.T) {
+
+	p, _ := NewChannelPool(int64(maxFree), int64(maxConn), factory)
 	defer p.Close()
 
-	// get/create from the pool
-	conns := make([]net.Conn, maxFree)
-	for i := 0; i < maxFree; i++ {
-		conn, _ := p.Get()
-		conns[i] = conn
+	conns := make([]net.Conn, 0, maxFree)
+	for i := 0; i < int(p.maxFree); i++ {
+		conn, err := p.Get()
+		if err != nil {
+			t.Errorf("Get error: %s", err)
+		}
+		conns = append(conns, conn)
 	}
 
-	// now put them all back
+	if p.Len() != 0 {
+		t.Errorf("Get error. Expecting %d, got %d",
+			0, p.Len())
+	}
+
 	for _, conn := range conns {
-		if err = p.Put(conn); err != nil {
-			t.Error(err)
+		err := p.Put(conn)
+		if err != nil {
+			t.Errorf("Get error: %s", err)
 		}
 	}
 
 	if p.Len() != maxFree {
-		t.Errorf("Put error len. Expecting %d, got %d",
+		t.Errorf("Get error. Expecting %d, got %d",
 			maxFree, p.Len())
 	}
-
-	conn, _ := p.Get()
-	p.Close() // close pool
-
-	if p.OpenNum() != 1 {
-		t.Errorf("Get error. Expecting %d, got %d",
-			1, p.OpenNum())
-	}
-
-	if p.Len() != 0 {
-		t.Errorf("the num of free conn is not zero")
-	}
-
-	err = p.Put(conn) // 向close的pool放入conn
-	if err != nil {
-		t.Error(err)
-	}
-
-	if p.OpenNum() != 0 {
-		t.Errorf("Get error. Expecting %d, got %d",
-			0, p.OpenNum())
-	}
-
 }
 
-func TestClose(t *testing.T) {
+func TestChannelPool_Close(t *testing.T) {
 
 	p, err := NewChannelPool(int64(maxFree), int64(maxConn), factory)
 	if err != nil {
@@ -156,32 +124,71 @@ func TestClose(t *testing.T) {
 	if err != nil {
 		t.Errorf("Get error: %s", err)
 	}
-	
-	p.Close()
 
-	cp := p.(*channelPool)
-
-	if cp.closed != true {
-		t.Errorf("Close error. Expecting %t, got %t",
-			true, cp.closed)
-	}
-
-	if cp.Len() != 0 {
-		t.Errorf("Close error. Expecting %d, got %d",
-			0, cp.Len())
-	}
-	if cp.OpenNum() != 1 {
-		t.Errorf("Close error. Expecting %d, got %d",
-			1, cp.OpenNum())
-	}
-
-	err = cp.Put(conn)
+	err = p.Close()
 	if err != nil {
 		t.Error(err)
 	}
-	if cp.openNum != 0 {
+
+	if p.closed != true {
+		t.Errorf("Close error. Expecting %t, got %t",
+			true, p.closed)
+	}
+
+	if p.Len() != 0 {
 		t.Errorf("Close error. Expecting %d, got %d",
-			0, cp.openNum)
+			0, p.Len())
+	}
+	if p.OpenNum() != 1 {
+		t.Errorf("Close error. Expecting %d, got %d",
+			1, p.OpenNum())
+	}
+
+	err = p.Put(conn)
+	if err != nil {
+		t.Error(err)
+	}
+	if p.openNum != 0 {
+		t.Errorf("Close error. Expecting %d, got %d",
+			0, p.openNum)
+	}
+
+}
+
+func TestChannelPool_MaxConn(t *testing.T) {
+	p, _ := NewChannelPool(int64(maxFree), int64(maxFree), factory)
+	defer p.Close()
+
+	// get all free conns
+	conns := make([]net.Conn, maxFree)
+	for i := 0; i < maxFree; i++ {
+		conn, _ := p.Get()
+		conns[i] = conn
+	}
+
+	if p.Len() != 0 {
+		t.Errorf("Get error. Expecting %d, got %d",
+			0, p.Len())
+	}
+
+	conn := conns[0]
+
+	go func() {
+		// 放回conn
+		time.Sleep(time.Second)
+		if err := p.Put(conn); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	newConn, err := p.Get()
+	if err != nil {
+		t.Errorf("Get error: %s", err)
+	}
+
+	if conn != newConn {
+		t.Errorf("Get error. Expecting %v, got %v",
+			conn, newConn)
 	}
 
 }

@@ -23,6 +23,8 @@ type channelPool struct {
 
 	maxConn int64 // 最大conn数量, <= 0 不限制
 
+	maxFree int64 // 最大空闲conn数量
+
 	openNum int64 // 已创建连接数
 }
 
@@ -33,7 +35,7 @@ var (
 // Factory net.Conn 生产者
 type Factory func() (net.Conn, error)
 
-func NewChannelPool(maxFree, maxConn int64, factory Factory) (Pool, error) {
+func NewChannelPool(maxFree, maxConn int64, factory Factory) (*channelPool, error) {
 
 	if maxFree <= 0 || maxConn < 0 || maxFree > maxConn {
 		return nil, errors.New("invalid capacity settings")
@@ -42,13 +44,15 @@ func NewChannelPool(maxFree, maxConn int64, factory Factory) (Pool, error) {
 	p := &channelPool{
 		connCh:  make(chan net.Conn, maxFree),
 		factory: factory,
+		maxConn: maxConn,
+		maxFree: maxFree,
 	}
 
 	// 初始化链接
 	for i := 0; i < int(maxFree); i++ {
 		conn, err := factory()
 		if err != nil {
-			p.Close()
+			_ = p.Close()
 			return nil, fmt.Errorf("factory is not able to fill the pool: %s", err)
 		}
 		p.connCh <- conn
@@ -87,7 +91,7 @@ func (p *channelPool) GetWitchContext(ctx context.Context) (net.Conn, error) {
 			if conn == nil {
 				return nil, ErrClosed
 			}
-			return p.wrapConn(conn), nil
+			return conn, nil
 		}
 	}
 
@@ -98,14 +102,10 @@ func (p *channelPool) GetWitchContext(ctx context.Context) (net.Conn, error) {
 		return nil, err
 	}
 	p.openNum++
-	return p.wrapConn(conn), nil
+	return conn, nil
 }
 
 func (p *channelPool) Put(conn net.Conn) error {
-	return p.PutWithContext(context.Background(), conn)
-}
-
-func (p *channelPool) PutWithContext(ctx context.Context, conn net.Conn) error {
 
 	if conn == nil {
 		return errors.New("connection is nil. rejecting")
@@ -124,28 +124,66 @@ func (p *channelPool) PutWithContext(ctx context.Context, conn net.Conn) error {
 	}
 
 	select {
-	case <-ctx.Done():
-		return ErrTimeOut
 	case p.connCh <- conn:
 		return nil
+	default:
+		err := conn.Close()
+		if err == nil {
+			p.openNum--
+		}
+		return err
 	}
 }
 
-func (p *channelPool) Close() {
+//
+//func (p *channelPool) Put(conn net.Conn) error {
+//	return p.PutWithContext(context.Background(), conn)
+//}
+//
+//func (p *channelPool) PutWithContext(ctx context.Context, conn net.Conn) error {
+//
+//	if conn == nil {
+//		return errors.New("connection is nil. rejecting")
+//	}
+//
+//	p.mu.Lock()
+//	defer p.mu.Unlock()
+//
+//	// 已关闭 || 已达到最大空闲链接数
+//	if p.closed || len(p.connCh) == int(p.maxFree) {
+//		err := conn.Close()
+//		if err == nil {
+//			p.openNum--
+//		}
+//		return err
+//	}
+//
+//	select {
+//	case <-ctx.Done():
+//		return ErrTimeOut
+//	case p.connCh <- conn:
+//		return nil
+//	}
+//}
+
+func (p *channelPool) Close() error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.closed {
-		return
+		return ErrClosed
 	}
 
 	p.closed = true
 	close(p.connCh)
 	for c := range p.connCh {
-		_ = c.Close()
+		if err := c.Close(); err != nil {
+			return err
+		}
 		p.openNum--
 	}
+	return nil
 }
 
 func (p *channelPool) Len() int {
@@ -156,7 +194,7 @@ func (p *channelPool) OpenNum() int {
 	return int(p.openNum)
 }
 
-func (p *channelPool) wrapConn(conn net.Conn) net.Conn {
-	pc := &PoolConn{Conn: conn}
-	return pc
-}
+//func (p *channelPool) wrapConn(conn net.Conn) net.Conn {
+//	pc := &PoolConn{Conn: conn, pool: p}
+//	return pc
+//}
