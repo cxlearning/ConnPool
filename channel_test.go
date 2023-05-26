@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -193,6 +194,32 @@ func TestChannelPool_MaxConn(t *testing.T) {
 
 }
 
+func TestPoolWriteRead(t *testing.T) {
+	p, _ := NewChannelPool(int64(maxFree), int64(maxFree), factory)
+	defer p.Close()
+
+	conn, err := p.Get()
+	if err != nil {
+		t.Errorf("Get error: %s", err)
+	}
+	defer conn.Close()
+
+	// write
+	_, err = conn.Write([]byte("hello"))
+	if err != nil {
+		t.Errorf("Get error: %s", err)
+	}
+
+	// read
+	buffer := make([]byte, 256)
+	_, err = conn.Read(buffer)
+	if err != nil {
+		t.Errorf("Get error: %s", err)
+	}
+	fmt.Println("client read: ", string(buffer))
+
+}
+
 func simpleTCPServer() {
 	l, err := net.Listen(network, address)
 	if err != nil {
@@ -209,6 +236,8 @@ func simpleTCPServer() {
 		go func() {
 			buffer := make([]byte, 256)
 			conn.Read(buffer)
+			fmt.Println("server read: ", string(buffer))
+			conn.Write(buffer)
 		}()
 	}
 }

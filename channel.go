@@ -61,13 +61,6 @@ func NewChannelPool(maxFree, maxConn int64, factory Factory) (*channelPool, erro
 	return p, nil
 }
 
-//func (p *channelPool) getConnCh() chan net.Conn {
-//	p.mu.RLock()
-//	connCh := p.connCh
-//	p.mu.RUnlock()
-//	return connCh
-//}
-
 func (p *channelPool) Get() (net.Conn, error) {
 	return p.GetWitchContext(context.Background())
 }
@@ -135,37 +128,6 @@ func (p *channelPool) Put(conn net.Conn) error {
 	}
 }
 
-//
-//func (p *channelPool) Put(conn net.Conn) error {
-//	return p.PutWithContext(context.Background(), conn)
-//}
-//
-//func (p *channelPool) PutWithContext(ctx context.Context, conn net.Conn) error {
-//
-//	if conn == nil {
-//		return errors.New("connection is nil. rejecting")
-//	}
-//
-//	p.mu.Lock()
-//	defer p.mu.Unlock()
-//
-//	// 已关闭 || 已达到最大空闲链接数
-//	if p.closed || len(p.connCh) == int(p.maxFree) {
-//		err := conn.Close()
-//		if err == nil {
-//			p.openNum--
-//		}
-//		return err
-//	}
-//
-//	select {
-//	case <-ctx.Done():
-//		return ErrTimeOut
-//	case p.connCh <- conn:
-//		return nil
-//	}
-//}
-
 func (p *channelPool) Close() error {
 
 	p.mu.Lock()
@@ -193,8 +155,3 @@ func (p *channelPool) Len() int {
 func (p *channelPool) OpenNum() int {
 	return int(p.openNum)
 }
-
-//func (p *channelPool) wrapConn(conn net.Conn) net.Conn {
-//	pc := &PoolConn{Conn: conn, pool: p}
-//	return pc
-//}
